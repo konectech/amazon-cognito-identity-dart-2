@@ -1019,7 +1019,7 @@ Also, add package:js as a dependency in your app's `pubspec.yaml`
   e = e >> bigIntOne;
   b = (b * b) % m;
 }
-  return r;
+  return r.toString();
 }
 </script>
 ```
