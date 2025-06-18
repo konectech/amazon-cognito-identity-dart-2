@@ -79,6 +79,19 @@ class CognitoUserTotpRequiredException extends CognitoUserException {
       this.message});
 }
 
+class CognitoUserEmailOtpRequiredException extends CognitoUserException {
+  @override
+  String? message;
+  @override
+  String? challengeName;
+  dynamic challengeParameters;
+
+  CognitoUserEmailOtpRequiredException(
+      {this.challengeName = 'EMAIL_OTP',
+      this.challengeParameters,
+      this.message});
+}
+
 class CognitoUserCustomChallengeException extends CognitoUserException {
   @override
   String? message;
@@ -99,4 +112,26 @@ class CognitoUserConfirmationNecessaryException extends CognitoUserException {
 
   CognitoUserConfirmationNecessaryException(
       {this.signInUserSession, this.message = 'User Confirmation Necessary'});
+}
+
+class CognitoUserDeviceConfirmationNecessaryException
+    extends CognitoUserException {
+  @override
+  String? message;
+  CognitoUserSession? signInUserSession;
+
+  CognitoUserDeviceConfirmationNecessaryException(
+      {this.signInUserSession,
+      this.message = 'User Device Confirmation Necessary'});
+}
+
+class CognitoUserPhoneNumberVerificationNecessaryException
+    extends CognitoUserException {
+  @override
+  String? message;
+  CognitoUserSession? signInUserSession;
+
+  CognitoUserPhoneNumberVerificationNecessaryException(
+      {this.signInUserSession,
+      this.message = 'Verification of Attribute \'phone_number\' Necessary'});
 }

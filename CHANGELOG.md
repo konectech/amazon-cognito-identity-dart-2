@@ -1,6 +1,59 @@
+## 3.8.1
+- feat: new password challenge support
+
+## 3.8.0
+- fix: confirmPassword returns response rather than always true
+- feat: email OTP MFA support
+- bumped: flutter_lints from 4.0.0 to 5.0.0
+
+- ## 3.7.0
+- feat: upgraded associateSoftwareToken and verifySoftwareToken to use AssociateSoftwareToken with either an access token or a session string
+- bumped: flutter_lints from 3.0.2 to 4.0.0
+
+## 3.6.5
+- added: ClientMetaData to a parameter of respondToAuthChallenge
+
+## 3.6.4
+- added: optional Refresh Token revocation on sign-out
+
+## 3.6.3
+- added: secret hash in SMS MFA
+
+## 3.6.2
+- bumped: js from 0.6.7 to 0.7.0
+
+## 3.6.1
+- fixed: username assignment during _authenticateUserDefaultAuth in CognitoUser
+
+## 3.6.0
+- http dependency includes older 0.13.1 version as valid
+- added: additional support for mfa functionalities
+
+## 3.6.0-dev.1
+- http dependency includes older 0.13.1 version as valid
+
+## 3.5.0
+- dependencies are updated to the latest
+
+## 3.4.0
+- fixed: SocketException when network is disabled
+
+## 3.3.0
+- changed: a specific exception `CognitoUserDeviceConfirmationNecessaryException` that can be handled whenever an users device needs confirmation is separated from `CognitoUserConfirmationNecessaryException`
+
+## 3.2.0
+- added: better handling of unverified phone numbers using sms mfa
+- added: allow CUSTOM_AUTH authentication flow via SRP password verification
+
+## 3.1.1
+- fixed: CognitoUser.getSession throws TypeError when storage returns null for clockDrift
+
+## 3.1.0
+- feat: try to refresh session if access token is null
+
 ## 3.0.3
 - fixed: clientSecret instead of client secret hash in refresh session
--
+
 ## 3.0.2
 - added: secret hash to sendNewPasswordRequired function
 

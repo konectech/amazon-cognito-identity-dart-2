@@ -122,6 +122,8 @@ try {
   // handle MFA_SETUP challenge
 } on CognitoUserTotpRequiredException catch (e) {
   // handle SOFTWARE_TOKEN_MFA challenge
+} on CognitoUserEmailOtpRequiredException catch (e) {
+  // handle EMAIL_OTP challenge
 } on CognitoUserCustomChallengeException catch (e) {
   // handle CUSTOM_CHALLENGE challenge
 } on CognitoUserConfirmationNecessaryException catch (e) {
@@ -194,7 +196,7 @@ try {
 }
 ```
 
-__Use case 9.__ Enabling MFA for a user on a pool that has an optional MFA setting for authenticated users.
+__Use case 9.__ Enabling SMS-MFA for a user on a pool that has an optional MFA setting for authenticated users. The phone number needs to be verified
 
 ```dart
 bool mfaEnabled = false;
@@ -359,6 +361,8 @@ try {
     // handle MFA_SETUP challenge
   } on CognitoUserTotpRequiredException catch (e) {
     // handle SOFTWARE_TOKEN_MFA challenge
+  } on CognitoUserEmailOtpRequiredException catch (e) {
+    // handle EMAIL_OTP challenge
   } on CognitoUserCustomChallengeException catch (e) {
     // handle CUSTOM_CHALLENGE challenge
   } catch (e) {
@@ -372,6 +376,8 @@ try {
   // handle MFA_SETUP challenge
 } on CognitoUserTotpRequiredException catch (e) {
   // handle SOFTWARE_TOKEN_MFA challenge
+} on CognitoUserEmailOtpRequiredException catch (e) {
+  // handle EMAIL_OTP . challenge
 } on CognitoUserCustomChallengeException catch (e) {
   // handle CUSTOM_CHALLENGE challenge
 } on CognitoUserConfirmationNecessaryException catch (e) {
@@ -516,8 +522,9 @@ class Policy {
     this.credential,
     this.maxFileSize,
     this.sessionToken,
-    {this.region = 'us-east-1'},
-   );
+    {
+    this.region = 'us-east-1',
+   });
 
   factory Policy.fromS3PresignedPost(
     String key,
@@ -525,9 +532,9 @@ class Policy {
     int expiryMinutes,
     String accessKeyId,
     int maxFileSize,
-    String sessionToken,
-    {String region},
-   ) {
+    String sessionToken, {
+    String region,
+   }) {
     final datetime = SigV4.generateDatetime();
     final expiration = (DateTime.now())
         .add(Duration(minutes: expiryMinutes))

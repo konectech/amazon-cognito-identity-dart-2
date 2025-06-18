@@ -31,6 +31,35 @@ class CognitoUserAuthResult {
   });
 }
 
+class IMfaSettings {
+  final bool preferredMfa;
+  final bool enabled;
+
+  IMfaSettings({
+    required this.preferredMfa,
+    required this.enabled,
+  });
+
+  Map<String, dynamic> toMap() {
+    return <String, dynamic>{
+      'PreferredMfa': preferredMfa,
+      'Enabled': enabled,
+    };
+  }
+
+  factory IMfaSettings.fromMap(Map<String, dynamic> map) {
+    return IMfaSettings(
+      preferredMfa: map['PreferredMfa'] as bool,
+      enabled: map['Enabled'] as bool,
+    );
+  }
+
+  String toJson() => json.encode(toMap());
+
+  factory IMfaSettings.fromJson(String source) =>
+      IMfaSettings.fromMap(json.decode(source) as Map<String, dynamic>);
+}
+
 class CognitoUser {
   String? _deviceKey;
   String? _randomPassword;
@@ -113,11 +142,34 @@ class CognitoUser {
           challengeParameters: challengeParameters);
     }
 
+    if (challengeName == 'EMAIL_OTP') {
+      _session = dataAuthenticate['Session'];
+      throw CognitoUserEmailOtpRequiredException(
+          challengeName: challengeName,
+          challengeParameters: challengeParameters);
+    }
+
     if (challengeName == 'CUSTOM_CHALLENGE') {
       _session = dataAuthenticate['Session'];
       throw CognitoUserCustomChallengeException(
           challengeName: challengeName,
           challengeParameters: challengeParameters);
+    }
+
+    if (challengeName == 'NEW_PASSWORD_REQUIRED') {
+      _session = dataAuthenticate['Session'];
+      dynamic userAttributes;
+      List<dynamic>? requiredAttributes = [];
+      if (challengeParameters['userAttributes'] != null) {
+        userAttributes = json.decode(challengeParameters['userAttributes']);
+        requiredAttributes = json.decode(
+          challengeParameters['requiredAttributes'],
+        );
+      }
+      throw CognitoUserNewPasswordRequiredException(
+        userAttributes: userAttributes,
+        requiredAttributes: requiredAttributes,
+      );
     }
 
     if (challengeName == 'DEVICE_SRP_AUTH') {
@@ -188,41 +240,55 @@ class CognitoUser {
     final refreshTokenKey = '$keyPrefix.refreshToken';
     final clockDriftKey = '$keyPrefix.clockDrift';
 
-    if (await storage.getItem(idTokenKey) != null) {
-      final idToken = CognitoIdToken(await storage.getItem(idTokenKey));
-      final accessToken =
-          CognitoAccessToken(await storage.getItem(accessTokenKey));
-      final refreshToken =
-          CognitoRefreshToken(await storage.getItem(refreshTokenKey));
-      final clockDrift = int.parse(await storage.getItem(clockDriftKey));
+    final refreshTokenValue = await storage.getItem(refreshTokenKey);
+    final refreshToken = CognitoRefreshToken(refreshTokenValue);
+    final canRefreshToken = refreshToken.getToken() != null;
 
-      final cachedSession = CognitoUserSession(
-        idToken,
-        accessToken,
-        refreshToken: refreshToken,
-        clockDrift: clockDrift,
-      );
+    final clockDriftValue = await storage.getItem(clockDriftKey);
+    final clockDrift = int.tryParse(clockDriftValue ?? '');
 
-      if (cachedSession.isValid()) {
-        _signInUserSession = cachedSession;
-        return _signInUserSession;
+    final idTokenValue = await storage.getItem(idTokenKey);
+    if (idTokenValue == null) {
+      if (canRefreshToken) {
+        return refreshSession(refreshToken);
       }
+      throw Exception(
+          'Local storage is missing an ID Token, Please authenticate');
+    }
+    final idToken = CognitoIdToken(idTokenValue);
 
-      if (refreshToken.getToken() == null) {
-        throw Exception('Cannot retrieve a new session. Please authenticate.');
+    final accessTokenValue = await storage.getItem(accessTokenKey);
+    if (accessTokenValue == null) {
+      if (canRefreshToken) {
+        return refreshSession(refreshToken);
       }
+      throw Exception(
+          'Local storage is missing an Access Token, Please authenticate');
+    }
+    final accessToken = CognitoAccessToken(accessTokenValue);
 
+    final cachedSession = CognitoUserSession(
+      idToken,
+      accessToken,
+      refreshToken: refreshToken,
+      clockDrift: clockDrift,
+    );
+
+    if (cachedSession.isValid()) {
+      _signInUserSession = cachedSession;
+      return _signInUserSession;
+    }
+
+    if (canRefreshToken) {
       return refreshSession(refreshToken);
     }
-    throw Exception(
-        'Local storage is missing an ID Token, Please authenticate');
+
+    throw Exception('Cannot retrieve a new session. Please authenticate.');
   }
 
   /// This is used to initiate an attribute confirmation request
   Future getAttributeVerificationCode(String attributeName) async {
-    if (_signInUserSession == null || !_signInUserSession!.isValid()) {
-      throw Exception('User is not authenticated');
-    }
+    _signInUserSessionCheck();
 
     final paramsReq = {
       'AttributeName': attributeName,
@@ -234,9 +300,7 @@ class CognitoUser {
 
   /// This is used to confirm an attribute using a confirmation code
   Future<bool> verifyAttribute(attributeName, confirmationCode) async {
-    if (_signInUserSession == null || !_signInUserSession!.isValid()) {
-      throw Exception('User is not authenticated');
-    }
+    _signInUserSessionCheck();
 
     final paramsReq = {
       'AttributeName': attributeName,
@@ -482,23 +546,33 @@ class CognitoUser {
     if (authenticationFlowType == 'USER_PASSWORD_AUTH') {
       return await _authenticateUserPlainUsernamePassword(authDetails);
     } else if (authenticationFlowType == 'USER_SRP_AUTH' ||
-			         authenticationFlowType == 'CUSTOM_AUTH') {
+        authenticationFlowType == 'CUSTOM_AUTH') {
       return await _authenticateUserDefaultAuth(authDetails);
     }
     throw UnimplementedError('Authentication flow type is not supported.');
   }
 
   /// This is used for the user to signOut of the application and clear the cached tokens.
-  Future<void> signOut() async {
+  /// If `revokeRefreshToken` is set to true, it will revoke the refresh token.
+  Future<void> signOut({bool revokeRefreshToken = false}) async {
+    if (revokeRefreshToken && _signInUserSession != null) {
+      final paramsReq = {
+        'ClientId': pool.getClientId(),
+        'Token': _signInUserSession!.getRefreshToken()!.getToken(),
+      };
+      if (_clientSecret != null) {
+        paramsReq['ClientSecret'] = _clientSecret;
+      }
+      await client!.request('RevokeToken', paramsReq);
+    }
     _signInUserSession = null;
     await clearCachedTokens();
   }
 
   /// This is used to globally revoke all tokens issued to a user
   Future<void> globalSignOut() async {
-    if (_signInUserSession == null || !_signInUserSession!.isValid()) {
-      throw Exception('User is not authenticated');
-    }
+    _signInUserSessionCheck();
+
     final paramsReq = {
       'AccessToken': _signInUserSession!.getAccessToken().getJwtToken(),
     };
@@ -601,6 +675,9 @@ class CognitoUser {
     final challengeParameters = data['ChallengeParameters'];
 
     String srpUsername = challengeParameters['USER_ID_FOR_SRP'];
+    if (username != srpUsername) {
+      username = srpUsername;
+    }
     serverBValue = BigInt.parse(challengeParameters['SRP_B'], radix: 16);
     saltString =
         authenticationHelper.toUnsignedHex(challengeParameters['SALT']);
@@ -674,6 +751,7 @@ class CognitoUser {
       'ClientId': pool.getClientId(),
       'ChallengeResponses': challengeResponses,
       'Session': data['Session'],
+      'ClientMetadata': authDetails.getValidationData(),
     };
 
     if (getUserContextData() != null) {
@@ -862,6 +940,12 @@ class CognitoUser {
     if (mfaType == 'SOFTWARE_TOKEN_MFA') {
       challengeResponses['SOFTWARE_TOKEN_MFA_CODE'] = confirmationCode;
     }
+    if (mfaType == 'EMAIL_OTP') {
+      challengeResponses['EMAIL_OTP_CODE'] = confirmationCode;
+    }
+    if (_clientSecretHash != null) {
+      challengeResponses['SECRET_HASH'] = _clientSecretHash;
+    }
 
     await getCachedDeviceKeyAndPassword();
     if (_deviceKey != null) {
@@ -878,8 +962,21 @@ class CognitoUser {
       paramsReq['UserContextData'] = getUserContextData();
     }
 
-    final dataAuthenticate = await client!.request('RespondToAuthChallenge',
-        await _analyticsMetadataParamsDecorator.call(paramsReq));
+    dynamic dataAuthenticate;
+    try {
+      dataAuthenticate = await client!.request('RespondToAuthChallenge',
+          await _analyticsMetadataParamsDecorator.call(paramsReq));
+    } on CognitoClientException catch (e) {
+      // When trying to use MFA with a non verified phone_number this
+      // missleading error will be received because Cognito expects in this case
+      // the GUID style user name instead of the normal user name used in every
+      // other request.
+      if (e.code == "UserNotFoundException") {
+        throw CognitoUserPhoneNumberVerificationNecessaryException();
+      } else {
+        rethrow;
+      }
+    }
 
     final String? challengeName = dataAuthenticate['ChallengeName'];
 
@@ -927,7 +1024,7 @@ class CognitoUser {
         ['DeviceKey'];
     await cacheDeviceKeyAndPassword();
     if (dataConfirm['UserConfirmationNecessary'] == true) {
-      throw CognitoUserConfirmationNecessaryException(
+      throw CognitoUserDeviceConfirmationNecessaryException(
           signInUserSession: _signInUserSession);
     }
 
@@ -954,10 +1051,31 @@ class CognitoUser {
     return true;
   }
 
-  /// This is used by authenticated users to enable MFA for him/herself
+  /// This is used by authenticated users to enable SMS-MFA for him/herself.
+  /// A verified phone number is required.
   Future<bool> enableMfa() async {
-    if (_signInUserSession == null || !_signInUserSession!.isValid()) {
-      throw Exception('User is not authenticated');
+    _signInUserSessionCheck();
+
+    bool phoneNumberVerified = false;
+    final getUserParamsReq = {
+      'AccessToken': _signInUserSession!.getAccessToken().getJwtToken(),
+    };
+    final userData = await client!.request('GetUser', getUserParamsReq);
+
+    if (userData['UserAttributes'] != null) {
+      dynamic userAttributes = userData['UserAttributes'];
+      phoneNumberVerified = null !=
+          userAttributes.firstWhere(
+              (attribute) =>
+                  attribute['Name'] == 'phone_number_verified' &&
+                  attribute['Value'] == 'true', orElse: () {
+            return null;
+          });
+    }
+
+    if (!phoneNumberVerified) {
+      throw CognitoUserPhoneNumberVerificationNecessaryException(
+          signInUserSession: _signInUserSession);
     }
 
     final mfaOptions = [];
@@ -978,9 +1096,7 @@ class CognitoUser {
 
   /// This is used by an authenticated user to disable MFA for him/herself
   Future<bool> disableMfa() async {
-    if (_signInUserSession == null || !_signInUserSession!.isValid()) {
-      throw Exception('User is not authenticated');
-    }
+    _signInUserSessionCheck();
 
     final mfaOptions = [];
 
@@ -1052,16 +1168,14 @@ class CognitoUser {
     final refreshTokenKey = '$keyPrefix.refreshToken';
     final clockDriftKey = '$keyPrefix.clockDrift';
 
-    await Future.wait([
-      storage.setItem(
-          idTokenKey, _signInUserSession?.getIdToken().getJwtToken()),
-      storage.setItem(
-          accessTokenKey, _signInUserSession?.getAccessToken().getJwtToken()),
-      storage.setItem(
-          refreshTokenKey, _signInUserSession?.getRefreshToken()?.getToken()),
-      storage.setItem(clockDriftKey, '${_signInUserSession?.getClockDrift()}'),
-      storage.setItem(pool.lastUserKey, username),
-    ]);
+    await storage.setItem(
+      idTokenKey, _signInUserSession?.getIdToken().getJwtToken());
+    await storage.setItem(
+      accessTokenKey, _signInUserSession?.getAccessToken().getJwtToken());
+    await storage.setItem(
+      refreshTokenKey, _signInUserSession?.getRefreshToken()?.getToken());
+    await storage.setItem(clockDriftKey, '${_signInUserSession?.getClockDrift()}');
+    await storage.setItem(pool.lastUserKey, username);
   }
 
   /// This is used to clear the session tokens from local storage
@@ -1130,10 +1244,10 @@ class CognitoUser {
   }
 
   /// This is used by authenticated users to change a list of attributes
+  /// If phone_number is changed it needs to be verified to be able to use it
+  /// for MFA.
   Future<bool> updateAttributes(List<CognitoUserAttribute> attributes) async {
-    if (_signInUserSession == null || !_signInUserSession!.isValid()) {
-      throw Exception('User is not authenticated');
-    }
+    _signInUserSessionCheck();
 
     final paramsReq = {
       'AccessToken': _signInUserSession!.getAccessToken().getJwtToken(),
@@ -1161,9 +1275,7 @@ class CognitoUser {
 
   /// This is used by an authenticated user to delete him/herself
   Future<bool> deleteUser() async {
-    if (_signInUserSession == null || !_signInUserSession!.isValid()) {
-      throw Exception('User is not authenticated');
-    }
+    _signInUserSessionCheck();
 
     final paramsReq = {
       'AccessToken': _signInUserSession!.getAccessToken().getJwtToken(),
@@ -1172,5 +1284,138 @@ class CognitoUser {
     await clearCachedTokens();
 
     return true;
+  }
+
+  ///  This is used to associate a TOTP MFA
+  Future<String?> associateSoftwareToken() async {
+    if (_signInUserSession?.isValid() ?? false) {
+      final data = await client!.request(
+        'AssociateSoftwareToken',
+        {'AccessToken': _signInUserSession!.getAccessToken().getJwtToken()},
+      );
+
+      return data['SecretCode'];
+    } else if (_session != null) {
+      final data = await client!.request(
+        'AssociateSoftwareToken',
+        {'Session': _session},
+      );
+
+      _session = data["Session"];
+
+      return data['SecretCode'];
+    }
+
+    throw Exception("User is not authenticated");
+  }
+
+  /// This is used to verify a TOTP MFA
+  Future<bool> verifySoftwareToken({
+    required String totpCode,
+    String? friendlyDeviceName,
+  }) async {
+    if (_signInUserSession?.isValid() ?? false) {
+      final data = await client!.request('VerifySoftwareToken', {
+        'AccessToken': _signInUserSession!.getAccessToken().getJwtToken(),
+        'UserCode': totpCode,
+        'FriendlyDeviceName': friendlyDeviceName ?? 'My TOTP device',
+      });
+
+      return data['Status'] == 'SUCCESS';
+    } else if (_session != null) {
+      final data = await client!.request('VerifySoftwareToken', {
+        'Session': _session,
+        'UserCode': totpCode,
+        'FriendlyDeviceName': friendlyDeviceName ?? 'My TOTP device',
+      });
+
+      return data['Status'] == 'SUCCESS';
+    }
+
+    throw Exception("User is not authenticated");
+  }
+
+  /// This is used by an authenticated user to enable MFA for itself
+  Future<bool> setUserMfaPreference(
+    IMfaSettings? smsMfaSettings,
+    IMfaSettings? softwareTokenMfaSettings,
+  ) async {
+    _signInUserSessionCheck();
+
+    try {
+      await client!.request('SetUserMFAPreference', {
+        'SMSMfaSettings': smsMfaSettings?.toMap(),
+        'SoftwareTokenMfaSettings': softwareTokenMfaSettings?.toMap(),
+        'AccessToken': _signInUserSession?.getAccessToken().getJwtToken(),
+      });
+      return true;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  /// Set prefered MFA Method which can be one of the following 'SOFTWARE_TOKEN_MFA' | 'SMS_MFA' | 'NOMFA'
+  Future<bool> setPreferredMFA(String mfaMethod) async {
+    IMfaSettings? smsMfaSettings;
+    IMfaSettings? softwareTokenMfaSettings;
+
+    switch (mfaMethod) {
+      case 'SOFTWARE_TOKEN_MFA':
+        {
+          softwareTokenMfaSettings =
+              IMfaSettings(preferredMfa: true, enabled: true);
+          break;
+        }
+      case 'SMS_MFA':
+        {
+          smsMfaSettings = IMfaSettings(preferredMfa: true, enabled: true);
+          break;
+        }
+      case 'NOMFA':
+        {
+          smsMfaSettings = IMfaSettings(preferredMfa: false, enabled: false);
+          softwareTokenMfaSettings =
+              IMfaSettings(preferredMfa: false, enabled: false);
+          break;
+        }
+      default:
+        throw Exception('No valid MFA method provided');
+    }
+
+    return setUserMfaPreference(smsMfaSettings, softwareTokenMfaSettings);
+  }
+
+  /// This is used by an authenticated user to get the preferred MFA method
+  Future<String?> getPreferredMFA() async {
+    _signInUserSessionCheck();
+
+    final userData = await client!.request(
+      'GetUser',
+      {
+        'AccessToken': _signInUserSession!.getAccessToken().getJwtToken(),
+      },
+    );
+
+    return userData['PreferredMfaSetting'];
+  }
+
+  /// This is used by an authenticated user to get the available MFA methods
+  Future<String?> getUserMFASettingList() async {
+    _signInUserSessionCheck();
+
+    final userData = await client!.request(
+      'GetUser',
+      {
+        'AccessToken': _signInUserSession!.getAccessToken().getJwtToken(),
+      },
+    );
+
+    return userData['UserMFASettingList'];
+  }
+
+  void _signInUserSessionCheck() {
+    if (_signInUserSession == null || !_signInUserSession!.isValid()) {
+      throw Exception('User is not authenticated');
+    }
   }
 }
